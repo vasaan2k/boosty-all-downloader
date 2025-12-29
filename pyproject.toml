@@ -44,3 +44,5 @@ profile = "black"
 
 [tool.pyright]
 typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"
