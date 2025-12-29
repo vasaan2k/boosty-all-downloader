@@ -27,8 +27,8 @@ keywords = ["boosty", "video", "download", "media"]
 dependencies = ["mutagen~=1.45"]
 
 [project.urls]
-Homepage = "https://github.com/artem/boosty-downloader"
-Issues = "https://github.com/artem/boosty-downloader/issues"
+Homepage = "https://github.com/sormy/boosty-downloader"
+Issues = "https://github.com/sormy/boosty-downloader/issues"
 
 [project.scripts]
 boosty-dl = "boosty_dl.cli:main"
