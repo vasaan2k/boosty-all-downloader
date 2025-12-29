@@ -29,7 +29,7 @@ install: venv
 dev: venv
 	$(PIP) install -e ".[dev]"
 
-test: venv
+test: dev
 	$(PYTHON) -m pytest
 
 clean:
@@ -37,10 +37,10 @@ clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +
 	find . -type f -name '*.pyc' -delete
 
-format: venv
+format: dev
 	$(VENV)/bin/black src/
 
-lint: venv
+lint: dev
 	$(VENV)/bin/flake8 src/
 	$(VENV)/bin/pyright src/
 
