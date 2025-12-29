@@ -174,7 +174,7 @@ def _download_post_videos(
             if update_metadata:
                 print(f"Updating metadata: {local_filename}")
                 media.download_and_embed_metadata(
-                    filepath, channel_name, video_title, preview_url, post_url
+                    filepath, post_artist, video_title, preview_url, post_url
                 )
             else:
                 print(f"Skipping (exists): {local_filename}")
