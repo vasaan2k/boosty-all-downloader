@@ -146,7 +146,11 @@ def _download_post_videos(
 
         video_index += 1
         video_id = item["id"]
-        video_title = item["title"] or post_title or "untitled"
+
+        if is_single_video:
+            video_title = post_title or item["title"] or "untitled"
+        else:
+            video_title = item["title"] or post_title or "untitled"
 
         video_name = _generate_name(created_at, video_index, video_title or video_id)
 
