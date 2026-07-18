@@ -176,6 +176,8 @@ def _get_file_extension(item: dict) -> str:
 
 def _extract_text_content(post: api.Post) -> str:
     """Extract and format text content from a post."""
+    import json
+    
     text_parts = []
     
     # Add post title
@@ -193,8 +195,18 @@ def _extract_text_content(post: api.Post) -> str:
     for item in post.get("data", []):
         if item.get("type") == "text":
             content = item.get("content", "")
+            if not content:
+                continue
+            
+            # Content might be a string (JSON) or already a list
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except json.JSONDecodeError:
+                    continue
+            
             # Content is stored as JSON array: ["text", "style", []]
-            if content and isinstance(content, list) and len(content) > 0:
+            if isinstance(content, list) and len(content) > 0:
                 text_parts.append(content[0])
                 text_parts.append("")
     
