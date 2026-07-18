@@ -92,7 +92,12 @@ def main() -> None:
     parser.add_argument(
         "--download-all",
         action="store_true",
-        help="Download all content types (videos, audio, images, text)",
+        help="Download all content types (videos, audio, images, text) - this is now the default",
+    )
+    parser.add_argument(
+        "--include-video",
+        action="store_true",
+        help="Download only videos (original behavior)",
     )
 
     args = parser.parse_args()
@@ -127,10 +132,19 @@ def main() -> None:
 
         # process each channel or post
         # Determine which content types to include
-        include_video = True
-        include_audio = args.include_audio or args.download_all
-        include_images = args.include_images or args.download_all
-        include_text = args.include_text or args.download_all
+        # Default: download all content types
+        # --include-video: only download videos (original behavior)
+        if args.include_video:
+            include_video = True
+            include_audio = False
+            include_images = False
+            include_text = False
+        else:
+            # Default behavior: download all content types
+            include_video = True
+            include_audio = True
+            include_images = True
+            include_text = True
         
         all_downloaded_files = core.download_links(
             links=args.channels,

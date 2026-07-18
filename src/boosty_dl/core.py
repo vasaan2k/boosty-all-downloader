@@ -39,7 +39,7 @@ def _generate_dirname(
     if use_channel_dir:
         directory = os.path.join(directory, channel_name)
     if use_season_dir:
-        directory = os.path.join(directory, f"Season {created_at.year}")
+        directory = os.path.join(directory, str(created_at.year))
 
     return directory
 
