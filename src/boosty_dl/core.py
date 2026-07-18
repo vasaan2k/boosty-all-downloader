@@ -70,12 +70,45 @@ def _find_local_filename(
     return None
 
 
+def _count_downloadable_items(
+    post: api.Post,
+    include_video: bool = True,
+    include_audio: bool = False,
+    include_images: bool = False,
+) -> int:
+    count = 0
+    
+    # Count videos
+    if include_video:
+        count += sum(
+            1
+            for v in post.get("data", [])
+            if v.get("type") in ("ok_video", "video") 
+            and v.get("complete") 
+            and v.get("status") == "ok"
+        )
+    
+    # Count audio files
+    if include_audio:
+        count += sum(
+            1
+            for v in post.get("data", [])
+            if v.get("type") == "audio_file" and v.get("complete")
+        )
+    
+    # Count images
+    if include_images:
+        count += sum(
+            1
+            for v in post.get("data", [])
+            if v.get("type") == "image" and v.get("url")
+        )
+    
+    return count
+
+
 def _count_valid_videos(post: api.Post) -> int:
-    return sum(
-        1
-        for v in post.get("data", [])
-        if v.get("type") == "ok_video" and v.get("complete") and v.get("status") == "ok"
-    )
+    return _count_downloadable_items(post, include_video=True, include_audio=False, include_images=False)
 
 
 def _select_best_url(
@@ -105,7 +138,70 @@ def _select_best_url(
     return available[-1][1]
 
 
-def _download_post_videos(
+def _get_audio_url(item: dict) -> str | None:
+    """Get the download URL for an audio file."""
+    return item.get("url") if item.get("type") == "audio_file" else None
+
+
+def _get_image_url(item: dict) -> str | None:
+    """Get the download URL for an image."""
+    return item.get("url") if item.get("type") == "image" else None
+
+
+def _get_file_extension(item: dict) -> str:
+    """Get the appropriate file extension for an item."""
+    item_type = item.get("type", "")
+    
+    if item_type == "ok_video" or item_type == "video":
+        return ".mp4"
+    elif item_type == "audio_file":
+        # Try to get extension from title or use fileType
+        title = item.get("title", "")
+        if title and "." in title:
+            return "." + title.rsplit(".", 1)[-1].lower()
+        file_type = item.get("fileType", "").lower()
+        if file_type == "mp3":
+            return ".mp3"
+        return ".mp3"  # default
+    elif item_type == "image":
+        # Try to determine image type from URL or default to jpg
+        url = item.get("url", "")
+        if ".png" in url.lower():
+            return ".png"
+        if ".webp" in url.lower():
+            return ".webp"
+        return ".jpg"
+    return ""
+
+
+def _extract_text_content(post: api.Post) -> str:
+    """Extract and format text content from a post."""
+    text_parts = []
+    
+    # Add post title
+    title = post.get("title", "")
+    if title:
+        text_parts.append(f"# {title}\n")
+    
+    # Add post URL
+    post_id = post.get("id", "")
+    channel_name = post.get("user", {}).get("name", "")
+    if post_id and channel_name:
+        text_parts.append(f"Post URL: https://boosty.to/{channel_name}/posts/{post_id}\n")
+    
+    # Extract text from data items
+    for item in post.get("data", []):
+        if item.get("type") == "text":
+            content = item.get("content", "")
+            # Content is stored as JSON array: ["text", "style", []]
+            if content and isinstance(content, list) and len(content) > 0:
+                text_parts.append(content[0])
+                text_parts.append("")
+    
+    return "\n".join(text_parts)
+
+
+def _download_post_content(
     channel_name: str,
     output_dir: str,
     post: api.Post,
@@ -114,6 +210,11 @@ def _download_post_videos(
     use_channel_dir: bool = True,
     update_metadata: bool = False,
     start_video_index: int = 0,
+    include_video: bool = True,
+    include_audio: bool = False,
+    include_images: bool = False,
+    include_text: bool = False,
+    access_token: str | None = None,
 ) -> list[str]:
     post_id = post["id"]
     post_title = post["title"]
@@ -128,79 +229,211 @@ def _download_post_videos(
         print(f"Skipping (no access): {post_name}")
         return downloaded_files
 
-    video_count = _count_valid_videos(post)
-    if video_count == 0:
-        print(f"Skipping (no videos): {post_name}")
+    # Count downloadable items
+    item_count = _count_downloadable_items(
+        post, include_video, include_audio, include_images
+    )
+    has_text_content = any(item.get("type") == "text" for item in post.get("data", []))
+    
+    if item_count == 0 and not (include_text and has_text_content):
+        print(f"Skipping (no downloadable content): {post_name}")
         return downloaded_files
 
-    is_single_video = video_count == 1
+    # Save text content if requested
+    if include_text and has_text_content:
+        text_content = _extract_text_content(post)
+        if text_content.strip():
+            directory = _generate_dirname(
+                output_dir,
+                channel_name,
+                created_at,
+                use_channel_dir,
+                use_season_dir,
+            )
+            os.makedirs(directory, exist_ok=True)
+            
+            text_filename = f"{_generate_name(created_at, 0, post_title or post_id)}.md"
+            text_filepath = os.path.join(directory, text_filename)
+            
+            print(f"Saving text: {text_filename}")
+            with open(text_filepath, "w", encoding="utf-8") as f:
+                f.write(text_content)
+            downloaded_files.append(text_filename)
 
-    video_index = start_video_index
+    is_single_item = item_count == 1
+
+    item_index = start_video_index
 
     for item in post.get("data", []):
-        if item.get("type") != "ok_video":
-            continue
+        item_type = item.get("type")
+        item_id = item.get("id")
+        if not item_id and item_type != "text":
+            continue  # Skip items without ID (except text which we already handled)
+        
+        # Handle videos
+        if include_video and item_type in ("ok_video", "video"):
+            if not item.get("complete") or item.get("status") != "ok":
+                continue
 
-        if not item.get("complete") or item.get("status") != "ok":
-            continue
+            item_index += 1
 
-        video_index += 1
-        video_id = item["id"]
-
-        if is_single_video:
-            video_title = post_title or item["title"] or "untitled"
-        else:
-            video_title = item["title"] or post_title or "untitled"
-
-        video_name = _generate_name(created_at, video_index, video_title or video_id)
-
-        preview_url = item.get("preview") or item.get("defaultPreview")
-
-        url = _select_best_url(item.get("playerUrls"), max_quality)
-        if not url:
-            print(f"Skipping (no media): {video_name}")
-            continue
-
-        directory = _generate_dirname(
-            output_dir,
-            channel_name,
-            created_at,
-            use_channel_dir,
-            use_season_dir,
-        )
-
-        local_filename = _find_local_filename(
-            directory, video_id, post_id, is_single_video
-        )
-
-        if local_filename:
-            filepath = os.path.join(directory, local_filename)
-            if update_metadata:
-                print(f"Updating metadata: {local_filename}")
-                media.download_and_embed_metadata(
-                    filepath, post_artist, video_title, preview_url, post_url
-                )
+            if is_single_item:
+                item_title = post_title or item.get("title") or "untitled"
             else:
-                print(f"Skipping (exists): {local_filename}")
-            continue
+                item_title = item.get("title") or post_title or "untitled"
 
-        if update_metadata:
-            continue
+            item_name = _generate_name(created_at, item_index, item_title or item_id)
+            preview_url = item.get("preview") or item.get("defaultPreview")
 
-        os.makedirs(directory, exist_ok=True)
+            url = _select_best_url(item.get("playerUrls"), max_quality)
+            if not url:
+                print(f"Skipping (no media): {item_name}")
+                continue
 
-        filename = _generate_filename(created_at, video_index, video_title, video_id)
-        filepath = os.path.join(directory, filename)
-
-        print(f"Downloading: {filename}")
-        if media.download_file(filepath, url):
-            print(f"Embedding metadata: {filename}")
-            media.download_and_embed_metadata(
-                filepath, post_artist, video_title, preview_url, post_url
+            directory = _generate_dirname(
+                output_dir,
+                channel_name,
+                created_at,
+                use_channel_dir,
+                use_season_dir,
             )
-            downloaded_files.append(filename)
+
+            local_filename = _find_local_filename(
+                directory, item_id, post_id, is_single_item
+            )
+
+            if local_filename:
+                filepath = os.path.join(directory, local_filename)
+                if update_metadata:
+                    print(f"Updating metadata: {local_filename}")
+                    media.download_and_embed_metadata(
+                        filepath, post_artist, item_title, preview_url, post_url
+                    )
+                else:
+                    print(f"Skipping (exists): {local_filename}")
+                continue
+
+            if update_metadata:
+                continue
+
+            os.makedirs(directory, exist_ok=True)
+
+            extension = _get_file_extension(item)
+            filename = f"{_generate_name(created_at, item_index, item_title)}[{item_id}]{extension}"
+            filepath = os.path.join(directory, filename)
+
+            print(f"Downloading: {filename}")
+            if media.download_file(filepath, url, access_token=access_token):
+                # Embed metadata for MP4 files
+                if extension == ".mp4":
+                    print(f"Embedding metadata: {filename}")
+                    media.download_and_embed_metadata(
+                        filepath, post_artist, item_title, preview_url, post_url
+                    )
+                downloaded_files.append(filename)
+
+        # Handle audio files
+        elif include_audio and item_type == "audio_file":
+            if not item.get("complete"):
+                continue
+            
+            item_index += 1
+            
+            audio_title = item.get("title") or item.get("track") or post_title or "untitled"
+            item_name = _generate_name(created_at, item_index, audio_title)
+            
+            url = _get_audio_url(item)
+            if not url:
+                print(f"Skipping (no url): {item_name}")
+                continue
+
+            directory = _generate_dirname(
+                output_dir,
+                channel_name,
+                created_at,
+                use_channel_dir,
+                use_season_dir,
+            )
+
+            os.makedirs(directory, exist_ok=True)
+
+            extension = _get_file_extension(item)
+            filename = f"{_generate_name(created_at, item_index, audio_title)}[{item_id}]{extension}"
+            filepath = os.path.join(directory, filename)
+
+            if os.path.exists(filepath):
+                print(f"Skipping (exists): {filename}")
+                downloaded_files.append(filename)
+                continue
+
+            print(f"Downloading audio: {filename}")
+            if media.download_file(filepath, url, access_token=access_token):
+                downloaded_files.append(filename)
+
+        # Handle images
+        elif include_images and item_type == "image":
+            url = _get_image_url(item)
+            if not url:
+                continue
+            
+            item_index += 1
+            
+            image_title = item.get("title") or post_title or "image"
+            item_name = _generate_name(created_at, item_index, image_title)
+
+            directory = _generate_dirname(
+                output_dir,
+                channel_name,
+                created_at,
+                use_channel_dir,
+                use_season_dir,
+            )
+
+            os.makedirs(directory, exist_ok=True)
+
+            extension = _get_file_extension(item)
+            filename = f"{_generate_name(created_at, item_index, image_title)}[{item_id}]{extension}"
+            filepath = os.path.join(directory, filename)
+
+            if os.path.exists(filepath):
+                print(f"Skipping (exists): {filename}")
+                downloaded_files.append(filename)
+                continue
+
+            print(f"Downloading image: {filename}")
+            if media.download_file(filepath, url, access_token=access_token):
+                downloaded_files.append(filename)
 
     return downloaded_files
+
+
+def _download_post_videos(
+    channel_name: str,
+    output_dir: str,
+    post: api.Post,
+    max_quality: str | None = None,
+    use_season_dir: bool = True,
+    use_channel_dir: bool = True,
+    update_metadata: bool = False,
+    start_video_index: int = 0,
+    access_token: str | None = None,
+) -> list[str]:
+    """Legacy function for backward compatibility - only downloads videos."""
+    return _download_post_content(
+        channel_name=channel_name,
+        output_dir=output_dir,
+        post=post,
+        max_quality=max_quality,
+        use_season_dir=use_season_dir,
+        use_channel_dir=use_channel_dir,
+        update_metadata=update_metadata,
+        start_video_index=start_video_index,
+        include_video=True,
+        include_audio=False,
+        include_images=False,
+        include_text=False,
+        access_token=access_token,
+    )
 
 
 def download_post_videos(
@@ -237,6 +470,10 @@ def download_channel_videos(
     use_season_dir: bool = True,
     use_channel_dir: bool = True,
     update_metadata: bool = False,
+    include_video: bool = True,
+    include_audio: bool = False,
+    include_images: bool = False,
+    include_text: bool = False,
 ) -> list[str]:
     suffix = f" (last {days_back} days)" if days_back is not None else ""
     print(f"Fetching posts for channel {channel_name}{suffix}...")
@@ -245,17 +482,17 @@ def download_channel_videos(
 
     all_downloaded = []
     last_date = None
-    video_index = 0
+    item_index = 0
 
     for post in posts:
         created_at = datetime.fromtimestamp(post["createdAt"])
         current_date = created_at.date()
 
         if last_date != current_date:
-            video_index = 0
+            item_index = 0
             last_date = current_date
 
-        downloaded = _download_post_videos(
+        downloaded = _download_post_content(
             channel_name,
             output_dir,
             post,
@@ -263,13 +500,46 @@ def download_channel_videos(
             use_season_dir,
             use_channel_dir,
             update_metadata,
-            video_index,
+            item_index,
+            include_video,
+            include_audio,
+            include_images,
+            include_text,
+            access_token,
         )
         all_downloaded.extend(downloaded)
 
-        video_index += _count_valid_videos(post)
+        item_index += _count_downloadable_items(
+            post, include_video, include_audio, include_images
+        )
 
     return all_downloaded
+
+
+def download_post_videos(
+    channel_name: str,
+    post_id: str,
+    output_dir: str,
+    access_token: str | None = None,
+    max_quality: str | None = None,
+    use_season_dir: bool = True,
+    use_channel_dir: bool = True,
+    update_metadata: bool = False,
+) -> list[str]:
+    print(f"Fetching post {post_id} for channel {channel_name}...")
+    post = api.get_post(channel_name, post_id, access_token)
+
+    return _download_post_videos(
+        channel_name,
+        output_dir,
+        post,
+        max_quality,
+        use_season_dir,
+        use_channel_dir,
+        update_metadata,
+        0,
+        access_token,
+    )
 
 
 def download_links(
@@ -281,6 +551,10 @@ def download_links(
     use_season_dir: bool = True,
     use_channel_dir: bool = True,
     update_metadata: bool = False,
+    include_video: bool = True,
+    include_audio: bool = False,
+    include_images: bool = False,
+    include_text: bool = False,
 ) -> list[str]:
     all_downloaded = []
     for link in links:
@@ -307,6 +581,10 @@ def download_links(
                 use_season_dir=use_season_dir,
                 use_channel_dir=use_channel_dir,
                 update_metadata=update_metadata,
+                include_video=include_video,
+                include_audio=include_audio,
+                include_images=include_images,
+                include_text=include_text,
             )
 
         all_downloaded.extend(downloaded)

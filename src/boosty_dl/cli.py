@@ -74,6 +74,26 @@ def main() -> None:
     parser.add_argument(
         "--email-to", help="Email address to send download notifications to"
     )
+    parser.add_argument(
+        "--include-audio",
+        action="store_true",
+        help="Download audio files (audiobooks, podcasts, etc.)",
+    )
+    parser.add_argument(
+        "--include-images",
+        action="store_true",
+        help="Download images from posts",
+    )
+    parser.add_argument(
+        "--include-text",
+        action="store_true",
+        help="Save post text content as markdown files",
+    )
+    parser.add_argument(
+        "--download-all",
+        action="store_true",
+        help="Download all content types (videos, audio, images, text)",
+    )
 
     args = parser.parse_args()
 
@@ -106,6 +126,12 @@ def main() -> None:
                 )
 
         # process each channel or post
+        # Determine which content types to include
+        include_video = True
+        include_audio = args.include_audio or args.download_all
+        include_images = args.include_images or args.download_all
+        include_text = args.include_text or args.download_all
+        
         all_downloaded_files = core.download_links(
             links=args.channels,
             output_dir=args.output,
@@ -115,6 +141,10 @@ def main() -> None:
             use_season_dir=not args.no_season_dir,
             use_channel_dir=not args.no_channel_dir,
             update_metadata=args.update_metadata,
+            include_video=include_video,
+            include_audio=include_audio,
+            include_images=include_images,
+            include_text=include_text,
         )
 
         # refresh Plex library if requested

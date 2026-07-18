@@ -116,9 +116,14 @@ def download_file(
     filepath: str,
     url: str,
     show_progress: bool = True,
+    access_token: str | None = None,
 ) -> bool:
     part_filepath = filepath + ".part"
     cmd = [CURL_BIN, "-L"]
+    
+    # Add authorization header if access token is provided
+    if access_token:
+        cmd.extend(["-H", f"Authorization: Bearer {access_token}"])
 
     if os.path.exists(filepath):
         print(
