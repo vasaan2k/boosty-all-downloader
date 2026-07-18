@@ -75,19 +75,20 @@ def _count_downloadable_items(
     include_video: bool = True,
     include_audio: bool = False,
     include_images: bool = False,
+    include_files: bool = False,
 ) -> int:
     count = 0
-    
+
     # Count videos
     if include_video:
         count += sum(
             1
             for v in post.get("data", [])
-            if v.get("type") in ("ok_video", "video") 
-            and v.get("complete") 
+            if v.get("type") in ("ok_video", "video")
+            and v.get("complete")
             and v.get("status") == "ok"
         )
-    
+
     # Count audio files
     if include_audio:
         count += sum(
@@ -95,7 +96,7 @@ def _count_downloadable_items(
             for v in post.get("data", [])
             if v.get("type") == "audio_file" and v.get("complete")
         )
-    
+
     # Count images
     if include_images:
         count += sum(
@@ -103,7 +104,15 @@ def _count_downloadable_items(
             for v in post.get("data", [])
             if v.get("type") == "image" and v.get("url")
         )
-    
+
+    # Count files (documents)
+    if include_files:
+        count += sum(
+            1
+            for v in post.get("data", [])
+            if v.get("type") == "file" and v.get("complete") and v.get("url")
+        )
+
     return count
 
 
@@ -148,10 +157,15 @@ def _get_image_url(item: dict) -> str | None:
     return item.get("url") if item.get("type") == "image" else None
 
 
+def _get_file_url(item: dict) -> str | None:
+    """Get the download URL for a file attachment."""
+    return item.get("url") if item.get("type") == "file" else None
+
+
 def _get_file_extension(item: dict) -> str:
     """Get the appropriate file extension for an item."""
     item_type = item.get("type", "")
-    
+
     if item_type == "ok_video" or item_type == "video":
         return ".mp4"
     elif item_type == "audio_file":
@@ -171,6 +185,12 @@ def _get_file_extension(item: dict) -> str:
         if ".webp" in url.lower():
             return ".webp"
         return ".jpg"
+    elif item_type == "file":
+        # Get extension from title
+        title = item.get("title", "")
+        if title and "." in title:
+            return "." + title.rsplit(".", 1)[-1].lower()
+        return ""  # unknown
     return ""
 
 
@@ -226,6 +246,7 @@ def _download_post_content(
     include_audio: bool = False,
     include_images: bool = False,
     include_text: bool = False,
+    include_files: bool = False,
     access_token: str | None = None,
 ) -> list[str]:
     post_id = post["id"]
@@ -243,7 +264,7 @@ def _download_post_content(
 
     # Count downloadable items
     item_count = _count_downloadable_items(
-        post, include_video, include_audio, include_images
+        post, include_video, include_audio, include_images, include_files
     )
     has_text_content = any(item.get("type") == "text" for item in post.get("data", []))
     
@@ -416,6 +437,43 @@ def _download_post_content(
             if media.download_file(filepath, url, access_token=access_token):
                 downloaded_files.append(filename)
 
+        # Handle files (documents, attachments)
+        elif include_files and item_type == "file":
+            if not item.get("complete"):
+                continue
+
+            url = _get_file_url(item)
+            if not url:
+                continue
+
+            item_index += 1
+
+            file_title = item.get("title") or post_title or "file"
+            item_name = _generate_name(created_at, item_index, file_title)
+
+            directory = _generate_dirname(
+                output_dir,
+                channel_name,
+                created_at,
+                use_channel_dir,
+                use_season_dir,
+            )
+
+            os.makedirs(directory, exist_ok=True)
+
+            extension = _get_file_extension(item)
+            filename = f"{_generate_name(created_at, item_index, file_title)}[{item_id}]{extension}"
+            filepath = os.path.join(directory, filename)
+
+            if os.path.exists(filepath):
+                print(f"Skipping (exists): {filename}")
+                downloaded_files.append(filename)
+                continue
+
+            print(f"Downloading file: {filename}")
+            if media.download_file(filepath, url, access_token=access_token):
+                downloaded_files.append(filename)
+
     return downloaded_files
 
 
@@ -444,6 +502,7 @@ def _download_post_videos(
         include_audio=False,
         include_images=False,
         include_text=False,
+        include_files=False,
         access_token=access_token,
     )
 
@@ -486,6 +545,7 @@ def download_channel_videos(
     include_audio: bool = False,
     include_images: bool = False,
     include_text: bool = False,
+    include_files: bool = False,
 ) -> list[str]:
     suffix = f" (last {days_back} days)" if days_back is not None else ""
     print(f"Fetching posts for channel {channel_name}{suffix}...")
@@ -517,12 +577,13 @@ def download_channel_videos(
             include_audio,
             include_images,
             include_text,
+            include_files,
             access_token,
         )
         all_downloaded.extend(downloaded)
 
         item_index += _count_downloadable_items(
-            post, include_video, include_audio, include_images
+            post, include_video, include_audio, include_images, include_files
         )
 
     return all_downloaded
@@ -567,6 +628,7 @@ def download_links(
     include_audio: bool = False,
     include_images: bool = False,
     include_text: bool = False,
+    include_files: bool = False,
 ) -> list[str]:
     all_downloaded = []
     for link in links:
@@ -597,6 +659,7 @@ def download_links(
                 include_audio=include_audio,
                 include_images=include_images,
                 include_text=include_text,
+                include_files=include_files,
             )
 
         all_downloaded.extend(downloaded)

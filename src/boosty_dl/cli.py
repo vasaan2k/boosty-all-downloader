@@ -139,13 +139,15 @@ def main() -> None:
             include_audio = False
             include_images = False
             include_text = False
+            include_files = False
         else:
             # Default behavior: download all content types
             include_video = True
             include_audio = True
             include_images = True
             include_text = True
-        
+            include_files = True
+
         all_downloaded_files = core.download_links(
             links=args.channels,
             output_dir=args.output,
@@ -159,6 +161,7 @@ def main() -> None:
             include_audio=include_audio,
             include_images=include_images,
             include_text=include_text,
+            include_files=include_files,
         )
 
         # refresh Plex library if requested
